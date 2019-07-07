@@ -9,7 +9,7 @@ except:
     pass
 
 from .api import *
-
+import io
 import logbook
 logger = logbook.Logger(__name__)
 
@@ -54,6 +54,8 @@ def preprocess(db, stations, comps, goal_day, params, responses=None):
     """
     datafiles = {}
     output = Stream()
+    MULTIPLEX = False
+    MULTIPLEX_files = {}
     for station in stations:
         datafiles[station] = {}
         net, sta = station.split('.')
@@ -63,10 +65,31 @@ def preprocess(db, stations, comps, goal_day, params, responses=None):
         for comp in comps:
             datafiles[station][comp] = []
         for file in files:
-            if file.comp[-1] not in comps:
-                continue
-            fullpath = os.path.join(file.path, file.file)
-            datafiles[station][file.comp[-1]].append(fullpath)
+            if file.sta != "MULTIPLEX":
+                if file.comp[-1] not in comps:
+                    continue
+                fullpath = os.path.join(file.path, file.file)
+                datafiles[station][file.comp[-1]].append(fullpath)
+            else:
+                MULTIPLEX = True
+                print("Mutliplex mode, reading the files")
+                fullpath = os.path.join(file.path, file.file)
+                multiplexed = sorted(glob.glob(fullpath))
+                for comp in comps:
+                    for fn in multiplexed:
+                        if fn in MULTIPLEX_files:
+                            _ = MULTIPLEX_files[fn]
+                        else:
+                            # print("Reading %s" % fn)
+                            _ = read(fn, format=params.archive_format or None)
+                            traces = []
+                            for tr in _:
+                                if "%s.%s" % (tr.stats.network, tr.stats.station) in stations and tr.stats.channel[-1] in comps:
+                                    traces.append(tr)
+                            del _
+                            _ = Stream(traces=traces)
+                            MULTIPLEX_files[fn] = _
+                        datafiles[station][comp].append(_)
 
     for istation, station in enumerate(stations):
         net, sta = station.split(".")
@@ -75,15 +98,23 @@ def preprocess(db, stations, comps, goal_day, params, responses=None):
             if len(files) != 0:
                 logger.debug("%s.%s Reading %i Files" %
                               (station, comp, len(files)))
-                stream = Stream()
-                for file in sorted(files):
-                    try:
-                        st = read(file, dytpe=np.float,
-                              starttime=UTCDateTime(gd),
-                              endtime=UTCDateTime(gd)+86400)
-                    except:
-                        logger.debug("ERROR reading file %s" % file)
-                        continue
+                traces = []
+                for file in files:
+                    if isinstance(file, Stream):
+                        st = file.select(network=net, station=sta, component=comp).copy()
+                    else:
+                        try:
+                            # print("Reading %s" % file)
+                            # t=  time.time()
+                            st = read(file, dytpe=np.float,
+                                      starttime=UTCDateTime(gd),
+                                      endtime=UTCDateTime(gd)+86400,
+                                      station=sta,
+                                      format=params.archive_format or None)
+                            # print("done in", time.time()-t)
+                        except:
+                            logger.debug("ERROR reading file %s" % file)
+                            continue
                     for tr in st:
                         if len(tr.stats.channel) == 2:
                             tr.stats.channel += tr.stats.location
@@ -101,18 +132,26 @@ def preprocess(db, stations, comps, goal_day, params, responses=None):
                         tr.stats.station = tr.stats.station.upper()
                         tr.stats.channel = tr.stats.channel.upper()
 
-                    stream += st
+                        traces.append(tr)
                     del st
-                stream.sort()
-                try:
-                    # HACK not super clean... should find a way to prevent the
-                    # same trace id with different sps to occur
-                    stream.merge(method=1, interpolation_samples=3, fill_value=None)
-                except:
-                    logger.debug("Error while merging...")
-                    traceback.print_exc()
+                stream = Stream(traces=traces)
+                if not(len(stream)):
                     continue
-                stream = stream.split()
+                f = io.BytesIO()
+                stream.write(f, format='MSEED')
+                f.seek(0)
+                stream = read(f, format="MSEED")
+
+                stream.sort()
+                # try:
+                #     # HACK not super clean... should find a way to prevent the
+                #     # same trace id with different sps to occur
+                #     stream.merge(method=1, interpolation_samples=3, fill_value=None)
+                # except:
+                #     logger.debug("Error while merging...")
+                #     traceback.print_exc()
+                #     continue
+                # stream = stream.split()
                 if not len(stream):
                     continue
                 logger.debug("%s Checking sample alignment" % stream[0].id)
@@ -226,4 +265,5 @@ def preprocess(db, stations, comps, goal_day, params, responses=None):
                 del stream
             del files
     clean_scipy_cache()
+    del MULTIPLEX_files
     return output

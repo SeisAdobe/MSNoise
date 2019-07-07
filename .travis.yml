@@ -4,6 +4,9 @@
 # https://github.com/Jorge-C/ordination/blob/master/.travis.yml
 language: c
 
+services:
+  - mysql
+
 matrix:
   include:
     # do one build run with our minimum dependencies
@@ -13,13 +16,13 @@ matrix:
       env: PYTHON_VERSION=2.7
 
     - os: linux
-      env: PYTHON_VERSION=3.6
+      env: PYTHON_VERSION=3.7
 
     - os: osx
       env: PYTHON_VERSION=2.7
 
     - os: osx
-      env: PYTHON_VERSION=3.6
+      env: PYTHON_VERSION=3.7
 
 
 sudo: false
