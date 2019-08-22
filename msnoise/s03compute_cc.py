@@ -188,6 +188,9 @@ def main(loglevel="INFO"):
     filters = get_filters(db, all=False)
 
     logger.info("Will compute %s" % " ".join(params.components_to_compute))
+    
+    if "R" not in ''.join(params.components_to_compute) and "T" not in ''.join(params.components_to_compute):
+        logger.info("You seem to have configured no R nor T components, thus no rotation are needed. You should therefore use the 'msnoise compute_cc' instead, which is much faster")
 
     if params.remove_response:
         logger.debug('Pre-loading all instrument response')
@@ -218,12 +221,13 @@ def main(loglevel="INFO"):
 
         comps = []
         for comp in params.all_components:
-            if comp[0] in ["R", "T"] or comp[1] in ["R", "T"]:
-                comps.append("E")
-                comps.append("N")
-            else:
-                comps.append(comp[0])
-                comps.append(comp[1])
+            for c in comp:
+                if c in ["R", "T"]:
+                    comps.append("E")
+                    comps.append("N")
+                else:
+                    comps.append(c)
+
         comps = np.unique(comps)
         stream = preprocess(db, stations, comps, goal_day, params, responses)
 

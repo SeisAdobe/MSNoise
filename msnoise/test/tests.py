@@ -193,7 +193,7 @@ class MSNoiseTests(unittest.TestCase):
         db.close()
 
     def test_013_s03compute_cc(self):
-        from ..s03compute_cc import main
+        from ..s03compute_no_rotation import main
         try:
             main()
         except:
@@ -374,15 +374,15 @@ class MSNoiseTests(unittest.TestCase):
         db.close()
         self.test_013_s03compute_cc()
 
-    def test_031_compute_cc2tmp(self):
-        import shutil
-        shutil.rmtree("STACKS")
-        from ..api import connect, reset_jobs
-        db = connect()
-        reset_jobs(db, "CC", alljobs=True)
-        db.close()
-        from ..s03compute_no_rotation import main
-        main()
+    # def test_031_compute_cc_rot(self):
+    #     import shutil
+    #     shutil.rmtree("STACKS")
+    #     from ..api import connect, reset_jobs
+    #     db = connect()
+    #     reset_jobs(db, "CC", alljobs=True)
+    #     db.close()
+    #     from ..s03compute_no_rotation import main
+    #     main()
 
     # PLOTS
 
@@ -397,6 +397,22 @@ class MSNoiseTests(unittest.TestCase):
                 main(sta1, sta2, filter.ref, "ZZ",  1, show=False,
                      outfile="?.png")
                 fn = 'ccftime %s-%s-f%i-m%i.png' % \
+                     ("%s-%s" % (sta1.replace(".", "_"),
+                                 sta2.replace(".", "_")),
+                      "ZZ", filter.ref, 1)
+                self.assertTrue(os.path.isfile(fn), msg="%s doesn't exist" % fn)
+
+    def test_100_plot_interferogram(self):
+        from ..api import connect, get_station_pairs, get_filters
+        from ..plots.interferogram import main
+        db = connect()
+        for sta1, sta2 in get_station_pairs(db):
+            sta1 = "%s.%s" % (sta1.net, sta1.sta)
+            sta2 = "%s.%s" % (sta2.net, sta2.sta)
+            for filter in get_filters(db):
+                main(sta1, sta2, filter.ref, "ZZ",  1, show=False,
+                     outfile="?.png")
+                fn = 'interferogram %s-%s-f%i-m%i.png' % \
                      ("%s-%s" % (sta1.replace(".", "_"),
                                  sta2.replace(".", "_")),
                       "ZZ", filter.ref, 1)
@@ -418,20 +434,44 @@ class MSNoiseTests(unittest.TestCase):
                       "ZZ", filter.ref, 1)
                 self.assertTrue(os.path.isfile(fn), msg="%s doesn't exist" % fn)
 
-    def test_099_S01installer(self):
-        if "TRAVIS" not in os.environ:
-            print("Seems to be running on local machine, skipping MySQL test")
-            return
-        import shutil
-        shutil.move('db.ini', 'db.bak')
-        from ..s000installer import main
-        try:
-            ret = main(tech=2, username="root", password="",
-                       hostname="localhost", database="msnoise", prefix="")
-            self.failUnlessEqual(ret, 0)
-        except:
-            traceback.print_exc()
-            self.fail()
+    def test_102_plot_distance(self):
+        from ..plots.distance import main
+        main(filterid=1, components="ZZ", show=False, outfile="?.png")
+        fn = "distance ZZ-f1.png"
+        self.assertTrue(os.path.isfile(fn),
+                        msg="%s doesn't exist" % fn)
+
+        main(filterid=1, components="ZZ", show=False, outfile="?_refilter.png",
+             refilter="0.2:0.9")
+        fn = "distance ZZ-f1_refilter.png"
+        self.assertTrue(os.path.isfile(fn),
+                        msg="%s doesn't exist" % fn)
+
+    # def test_103_plot_mwcs(self):
+    #     from ..plots.mwcs import main
+    #     main("YA.UV05", "YA.UV06", filterid=1, components="ZZ",
+    #          mov_stack=5, show=False, outfile="?.png")
+    #     fn = "mwcs YA_UV05_YA_UV06-ZZ-f1-m5.png"
+    #     self.assertTrue(os.path.isfile(fn),
+    #                     msg="%s doesn't exist" % fn)
+
+    def test_104_plot_data_availability(self):
+        import glob
+        from ..plots.data_availability import main
+        main(show=False, outfile="?.png")
+        fn = glob.glob("data availability on*.png")
+        self.assertEqual(len(fn), 1)
+
+    def test_105_db_dump(self):
+        """
+        Tests the dump of the database and the creation of csv files
+        """
+        os.system("msnoise db dump")
+        self.assertTrue(os.path.isfile("config.csv"))
+        self.assertTrue(os.path.isfile("stations.csv"))
+        self.assertTrue(os.path.isfile("filters.csv"))
+        self.assertTrue(os.path.isfile("jobs.csv"))
+        self.assertTrue(os.path.isfile("data_availability.csv"))
 
     ### A few click CLI interface tests
 
@@ -539,6 +579,26 @@ class MSNoiseTests(unittest.TestCase):
         """
         parsed_crondays = s01scan_archive.parse_crondays('3w4d12h')
         self.assertEqual(parsed_crondays, datetime.timedelta(days=3*7+4, seconds=12*3600))
+
+    def test_999_S01installer(self):
+        if "TRAVIS_OS_NAME" not in os.environ:
+            print("Seems to be running on local machine, skipping MySQL test")
+            return
+
+        if os.environ["TRAVIS_OS_NAME"] != "linux":
+            print("Seems not to be running on a Linux machine, "
+                  "skipping MySQL test")
+            return
+        import shutil
+        shutil.move('db.ini', 'db.bak')
+        from ..s000installer import main
+        try:
+            ret = main(tech=2, username="root", password="",
+                       hostname="localhost", database="msnoise", prefix="")
+            self.failUnlessEqual(ret, 0)
+        except:
+            traceback.print_exc()
+            self.fail()
 
 
 def main(prefix=""):

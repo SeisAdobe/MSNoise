@@ -378,7 +378,13 @@ def execute(sql_command):
     r = db.execute(sql_command)
 
     if sql_command.count("select") or sql_command.count("SELECT"):
-        print(r.fetchall())
+        result = r.fetchall()
+        if not len(result):
+            print("The query returned no results, sorry.")
+        else:
+            import pandas as pd
+            df = pd.DataFrame(result)
+            print(df)
     db.commit()
     db.close()
 
@@ -501,6 +507,62 @@ def config_get(names):
     db.close()
 
 
+@db.command(name="dump")
+@click.option("--format", default="csv")
+def db_dump(format):
+    """
+    Dumps the complete database in a formatted structure.
+    """
+    from ..api import connect, get_engine
+    from sqlalchemy import MetaData
+    import pandas as pd
+
+    if format == "csv":
+        engine = get_engine(inifile=os.path.join(os.getcwd(), 'db.ini'))
+
+        meta = MetaData()
+        meta.reflect(bind=engine)
+
+        for table in meta.sorted_tables:
+            r = [dict(row) for row in engine.execute(table.select())]
+            df = pd.DataFrame(r)
+            print("Dumping table %s to %s.csv" % (table.name, table.name))
+            df.to_csv("%s.csv" % table.name, index=False)
+    else:
+        print("Currently only the csv format is supported, sorry.")
+
+
+@db.command(name="import")
+@click.argument("table")
+@click.option("--format", default="csv")
+@click.option("--force", is_flag=True, default=False)
+def db_import(table, format, force):
+    """
+    Imports msnoise tables from formatted files (csv).
+    """
+    from ..api import connect, get_engine
+    from sqlalchemy import MetaData
+    import pandas as pd
+
+    if format == "csv":
+        engine = get_engine(inifile=os.path.join(os.getcwd(), 'db.ini'))
+        print("Loading table %s from %s.csv" % (table, table))
+        df = pd.read_csv("%s.csv" % table)
+        if force:
+            df.to_sql(table, engine, if_exists="replace")
+        else:
+            try:
+                df.to_sql(table, engine)
+            except ValueError:
+                traceback.print_exc()
+                print("!"*80)
+                print("You're probably getting the error above because the "
+                      "table already exists, if you want to replace the table "
+                      "with the imported data, then pass the --force option")
+    else:
+        print("Currently only the csv format is supported, sorry.")
+
+
 @cli.command()
 @click.option('-s', '--sys', is_flag=True, help='System Info')
 @click.option('-m', '--modules', is_flag=True, help='Modules Info')
@@ -605,7 +667,7 @@ def new_jobs(init, nocc, hpc=""):
 @click.pass_context
 def compute_cc(ctx):
     """Computes the CC jobs (based on the "New Jobs" identified)"""
-    from ..s03compute_cc import main
+    from ..s03compute_no_rotation import main
     threads = ctx.obj['MSNOISE_threads']
     delay = ctx.obj['MSNOISE_threadsdelay']
     loglevel = ctx.obj['MSNOISE_verbosity']
@@ -623,11 +685,11 @@ def compute_cc(ctx):
             p.join()
 
 
-@cli.command(name='compute_cc2')
+@cli.command(name='compute_cc_rot')
 @click.pass_context
-def compute_cc2(ctx):
+def compute_cc_rot(ctx):
     """Computes the CC jobs (based on the "New Jobs" identified)"""
-    from ..s03compute_no_rotation import main
+    from ..s03compute_cc import main
     threads = ctx.obj['MSNOISE_threads']
     delay = ctx.obj['MSNOISE_threadsdelay']
     loglevel = ctx.obj['MSNOISE_verbosity']
@@ -651,12 +713,20 @@ def compute_cc2(ctx):
 @click.option('-m', '--mov', is_flag=True, help='Compute the MOV Stacks')
 @click.option('-s', '--step', is_flag=True, help='Compute the STEP Stacks')
 def stack(ctx, ref, mov, step):
-    """Stacks the [REF] and/or [MOV] windows"""
+    """Stacks the [REF] or [MOV] windows.
+    Computes the STACK jobs.
+    """
     click.secho('Lets STACK !', fg='green')
     from ..s04stack import main
     threads = ctx.obj['MSNOISE_threads']
     delay = ctx.obj['MSNOISE_threadsdelay']
     loglevel = ctx.obj['MSNOISE_verbosity']
+
+    if ref and mov:
+        click.secho("With MSNoise 1.6, you can't run REF & MOV stacks"
+                    "simultaneously, please run them one after the other.")
+        sys.exit()
+
     if threads == 1:
         if ref:
             main('ref', loglevel=loglevel)
@@ -699,7 +769,7 @@ def stack(ctx, ref, mov, step):
 @cli.command(name='compute_mwcs')
 @click.pass_context
 def compute_mwcs(ctx):
-    """Computes the MWCS based on the new stacked data"""
+    """Computes the MWCS jobs"""
     from ..s05compute_mwcs import main
     threads = ctx.obj['MSNOISE_threads']
     delay = ctx.obj['MSNOISE_threadsdelay']
@@ -750,31 +820,31 @@ def compute_dtt(ctx, interval):
 
 
 
-@cli.command(name='compute_dvv')
-@click.option('-f', '--filterid', default=1, help='Filter ID')
-@click.option('-c', '--comp', default="ZZ", help='Components (ZZ, ZR,...)')
-@click.option('-m', '--mov_stack', default=0, help='Plot specific mov stacks')
-@click.option('-p', '--pair', default=None, help='Plot a specific pair',
-              multiple=True)
-@click.option('-A', '--all', help='Show the ALL line?', is_flag=True)
-@click.option('-M', '--dttname', default="M", help='Plot M or M0?')
-@click.option('-s', '--show', help='Show interactively?',
-              default=True, type=bool)
-@click.option('-o', '--outfile', help='Output filename (?=auto)',
-              default=None, type=str)
-@click.pass_context
-def compute_dvv(ctx, mov_stack, comp, dttname, filterid, pair, all, show, outfile):
-    """Plots the dv/v (parses the dt/t results)\n
-    Individual pairs can be plotted extra using the -p flag one or more times.\n
-    Example: msnoise plot dvv -p ID_KWUI_ID_POSI\n
-    Example: msnoise plot dvv -p ID_KWUI_ID_POSI -p ID_KWUI_ID_TRWI\n
-    Remember to order stations alphabetically !
-    """
-    if ctx.obj['MSNOISE_custom']:
-        from s07_compute_dvv import main
-    else:
-        from ..s07_compute_dvv import main
-    main(mov_stack, dttname, comp, filterid, pair, all, show, outfile)
+# @cli.command(name='compute_dvv')
+# @click.option('-f', '--filterid', default=1, help='Filter ID')
+# @click.option('-c', '--comp', default="ZZ", help='Components (ZZ, ZR,...)')
+# @click.option('-m', '--mov_stack', default=0, help='Plot specific mov stacks')
+# @click.option('-p', '--pair', default=None, help='Plot a specific pair',
+#               multiple=True)
+# @click.option('-A', '--all', help='Show the ALL line?', is_flag=True)
+# @click.option('-M', '--dttname', default="M", help='Plot M or M0?')
+# @click.option('-s', '--show', help='Show interactively?',
+#               default=True, type=bool)
+# @click.option('-o', '--outfile', help='Output filename (?=auto)',
+#               default=None, type=str)
+# @click.pass_context
+# def compute_dvv(ctx, mov_stack, comp, dttname, filterid, pair, all, show, outfile):
+#     """Plots the dv/v (parses the dt/t results)\n
+#     Individual pairs can be plotted extra using the -p flag one or more times.\n
+#     Example: msnoise plot dvv -p ID_KWUI_ID_POSI\n
+#     Example: msnoise plot dvv -p ID_KWUI_ID_POSI -p ID_KWUI_ID_TRWI\n
+#     Remember to order stations alphabetically !
+#     """
+#     if ctx.obj['MSNOISE_custom']:
+#         from s07_compute_dvv import main
+#     else:com
+#         from ..s07_compute_dvv import main
+#     main(mov_stack, dttname, comp, filterid, pair, all, show, outfile)
 
 
 @cli.command()
